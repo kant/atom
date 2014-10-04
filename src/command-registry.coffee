@@ -5,6 +5,25 @@ _ = require 'underscore-plus'
 
 SequenceCount = 0
 SpecificityCache = {}
+NativeEventListenerDisposables = {}
+
+ElementAddEventListener = Element::addEventListener
+Element::addEventListener = (eventName, callback, useCapture) ->
+  if not useCapture and atom?.commands?
+    disposable = atom.commands.add(this, eventName, callback)
+    disposables = (NativeEventListenerDisposables[eventName] ?= new WeakMap)
+    disposables.set(callback, disposable)
+  else
+    ElementAddEventListener.call(this, eventName, callback)
+  undefined
+
+ElementRemoveEventListener = Element::removeEventListener
+Element::removeEventListener = (eventName, callback, useCapture) ->
+  if useCapture
+    ElementAddEventListener.call(this, eventName, callback)
+  else
+    NativeEventListenerDisposables[eventName]?.get(callback)?.dispose()
+  undefined
 
 module.exports =
 
@@ -122,7 +141,6 @@ class CommandRegistry
     new Disposable =>
       listenersForElement.splice(listenersForElement.indexOf(listener), 1)
       listenersForCommand.delete(element) if listenersForElement.length is 0
-      @listenerRemovedForCommand(commandName)
 
   # Public: Find all registered commands matching a query.
   #
@@ -168,8 +186,8 @@ class CommandRegistry
   #
   # * `target` The DOM node at which to start bubbling the command event.
   # * `commandName` {String} indicating the name of the command to dispatch.
-  dispatch: (target, commandName) ->
-    event = new CustomEvent(commandName, bubbles: true)
+  dispatch: (target, commandName, detail) ->
+    event = new CustomEvent(commandName, {bubbles: true, detail})
     eventWithTarget = Object.create(event, target: value: target)
     @handleCommandEvent(eventWithTarget)
 
@@ -243,7 +261,7 @@ class CommandRegistry
       @registeredCommands[commandName] = true
 
   addDOMListener: (node, commandName) ->
-    node?.addEventListener(commandName, @handleCommandEvent, true)
+    ElementAddEventListener.call(node, commandName, @handleCommandEvent, true)
     $(node).on commandName, @handleJQueryCommandEvent
 
   removeDOMListener: (node, commandName) ->
